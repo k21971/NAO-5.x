@@ -633,9 +633,9 @@ typedef unsigned char uchar;
 
 /* EXTRA_SANITY_CHECKS adds extra impossible calls,
  * probably not useful for normal play */
-#if (NH_DEVEL_STATUS != NH_STATUS_RELEASED)
-#define EXTRA_SANITY_CHECKS
-#endif
+/* #if (NH_DEVEL_STATUS != NH_STATUS_RELEASED)
+ * #define EXTRA_SANITY_CHECKS
+ * #endif */
 
 /* BREADCRUMBS employs the use of predefined compiler macros
  * __FUNCTION__ and __LINE__ to store some caller breadcrumbs
