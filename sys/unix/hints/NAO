@@ -222,7 +222,10 @@ ifeq "$(CCISCLANG)" "1"
 # clang-specific ends
 else
 # gcc-specific starts
+ifndef MUSL
+# __sighandler_t does not exist in musl
 LIBCFLAGS+=-DSIG_RET_TYPE=__sighandler_t
+endif
 # gcc-specific ends
 endif
 
@@ -446,11 +449,11 @@ SHELLDIR=/tmp
 ifdef MAKEFILE_TOP
 TESTGDBPATH=/usr/bin/gdb
 POSTINSTALL+= test -f $(TESTGDBPATH) || \
-                sed -i -e 's;^GDBPATH=/usr/bin/gdb;\#GDBPATH=/usr/bin/gdb;' \
-                -e 's;PANICTRACE_GDB=1;PANICTRACE_GDB=0;' $(INSTDIR)/sysconf;
+        sed -i -e 's;^GDBPATH=/usr/bin/gdb;\#GDBPATH=/usr/bin/gdb;' \
+        -e 's;PANICTRACE_GDB=1;PANICTRACE_GDB=0;' $(INSTDIR)/sysconf;
 POSTUPDATE+= test -f $(TESTGDBPATH) || \
-                sed -i -e 's;^GDBPATH=/usr/bin/gdb;\#GDBPATH=/usr/bin/gdb;' \
-                -e 's;PANICTRACE_GDB=1;PANICTRACE_GDB=0;' $(INSTDIR)/sysconf;
+        sed -i -e 's;^GDBPATH=/usr/bin/gdb;\#GDBPATH=/usr/bin/gdb;' \
+        -e 's;PANICTRACE_GDB=1;PANICTRACE_GDB=0;' $(INSTDIR)/sysconf;
 endif  #MAKEFILE_TOP
 
 ifeq '$(USE_NONOSTATICFN)' '1'
