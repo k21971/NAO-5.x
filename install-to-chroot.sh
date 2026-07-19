@@ -137,5 +137,3 @@ if [ -n "$NEWLIBS" ]; then
 fi
 
 echo "Finished."
-
-echo "Finished."
