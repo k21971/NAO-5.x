@@ -111,13 +111,31 @@ fi
 LIBS=`for lib in $LIBS; do echo $lib; done | sort | uniq`
 echo "Copying libraries:" $LIBS
 for lib in $LIBS; do
-        mkdir -p "$NAO_CHROOT`dirname $lib`"
-        if [ -f "$NAO_CHROOT$lib" ]
-	then
-		echo "$NAO_CHROOT$lib already exists - skipping."
-	else
-		cp $lib "$NAO_CHROOT$lib"
-	fi
+        # The chroot's curated lib layer -- and the etc/ld.so.conf that indexes it --
+        # use /lib/... . On a merged-/usr host (Ubuntu 26.04 on e1) ldd reports
+        # /usr/lib/x86_64-linux-gnu/..., and copying to that path verbatim builds a
+        # duplicate lib tree inside the chroot instead of matching the real layout.
+        # Strip a leading /usr so we land on the curated files; this is a no-op on a
+        # non-merged host (e.g. e4's 16.04), where ldd already reports /lib/... .
+        dest="${lib#/usr}"
+        mkdir -p "$NAO_CHROOT`dirname $dest`"
+        if [ -f "$NAO_CHROOT$dest" ]
+        then
+                echo "$NAO_CHROOT$dest already exists - skipping."
+        else
+                cp "$lib" "$NAO_CHROOT$dest"
+                NEWLIBS=1
+        fi
 done
+
+# Rebuild the chroot's ld.so.cache if we actually added a library. The cache is
+# what makes the curated layer resolvable (the chroot has no ldconfig of its
+# own), so a newly copied lib would otherwise be invisible to the loader.
+if [ -n "$NEWLIBS" ]; then
+        echo "New libraries copied - rebuilding chroot ld.so.cache"
+        ldconfig -r "$NAO_CHROOT"
+fi
+
+echo "Finished."
 
 echo "Finished."
