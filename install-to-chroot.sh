@@ -9,13 +9,13 @@
 # autonamed chroot directory. Can rename.
 DATESTAMP=`date +%Y%m%d-%H%M%S`
 NAO_CHROOT="/opt/nethack/nethack.alt.org"
-NETHACK_GIT="/home/K2/NAO-5.x"
+NETHACK_GIT="/opt/build/nethack/NAO-5.x"
 # the user & group from dgamelaunch config file.
 USRGRP="games:games"
 # COMPRESS from include/config.h; the compression binary to copy. leave blank to skip.
 COMPRESSBIN="/bin/gzip"
 # fixed data to copy (leave blank to skip)
-NH_GIT="/home/K2/NAO-5.x"
+NH_GIT="/opt/build/nethack/NAO-5.x"
 # HACKDIR from include/config.h; aka nethack subdir inside chroot
 NHSUBDIR="nh500"
 # VAR_PLAYGROUND from include/unixconf.h
