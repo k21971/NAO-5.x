@@ -16,6 +16,21 @@
 
 WANT_SOURCE_INSTALL=1
 
+# NAO server build policy - previously passed on the command line every build.
+# Both must be set here, at the top of the PRE segment, so they precede the
+# #-INCLUDE expansions and the NHUUID probe further down that consume them.
+# Command-line assignment still overrides either one (e.g. make NO_NHUUID=0).
+#
+# GIT=1 -> GITSUBMODULES=1 (multiw-2.500/misc.500) -> Lua built static from
+# submodules/lua, so no liblua5.4.so is needed inside the dgamelaunch chroot.
+# NOTE: this makes submodules/lua REQUIRED — a non-git tarball build will fail
+# unless the submodule is populated. NAO is always built from a git checkout.
+GIT=1
+# NO_NHUUID=1 -> WANT_NHUUID=0, skipping the libuuid autodetect below. Without
+# it, merely having uuid-dev installed silently adds -DNHUUID + -luuid and thus
+# a libuuid dependency in the chroot.
+NO_NHUUID=1
+
 WHICH_OS=Linux
 HINTSVERSION := 500
 
