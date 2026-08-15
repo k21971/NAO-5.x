@@ -103,7 +103,15 @@ RECOVER="$NETHACK_GIT/util/recover"
 
 if [ -n "$RECOVER" -a -e "$RECOVER" ]; then
   echo "Copying $RECOVER"
-  cp "$RECOVER" "$NAO_CHROOT/$NHSUBDIR/var"
+  # recover is CODE, so it belongs next to the game binary, not in var/.
+  # var/ is game DATA and is writable by the 'games' user the game drops to; an
+  # executable in there can be replaced by a compromised game process and is then
+  # run by an admin as root -- persistence + privesc. Same reason the game binary
+  # itself is root:root 755. (nao-admin docs/chroot.md, K2's code-vs-data rule.)
+  cp "$RECOVER" "$NAO_CHROOT/$NHSUBDIR/recover"
+  chown root:root "$NAO_CHROOT/$NHSUBDIR/recover"
+  chmod 755 "$NAO_CHROOT/$NHSUBDIR/recover"
+  rm -f "$NAO_CHROOT/$NHSUBDIR/var/recover"   # clean up the old location
   LIBS="$LIBS `findlibs $RECOVER`"
   cd "$NAO_CHROOT"
 fi
