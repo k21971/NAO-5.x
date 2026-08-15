@@ -299,6 +299,18 @@ NHCFLAGS+=-DDEFAULT_WINDOW_SYS=\"$(WANT_DEFAULT)\"
 NHCFLAGS+=-DSYSCF -DSYSCF_FILE=\"$(HACKDIR)/sysconf\" -DSECURE
 NHCFLAGS+=-DTIMED_DELAY
 NHCFLAGS+=-DSIMPLE_MAIL
+# CRASHREPORT names the program handed the assembled crash-report URL. The
+# Linux default in config.h is /usr/bin/xdg-open -- a desktop browser opener,
+# absent on a headless server by design -- so the execve fails and the whole
+# payload (backtrace + the messages before the crash) is discarded. Point it at
+# our own tiny logger instead; path is chroot-relative because the game execs
+# it from inside the chroot. Source: nao-admin src/nao-crashlog/.
+# config.h:245 is `#ifndef CRASHREPORT`, so defining it here simply wins, and
+# the `#ifdef CRASHREPORT` block below it still enables PANICTRACE/DUMPLOG_CORE.
+# NB this suppresses CRASHREPORT_EXEC_NOSTDERR (it is set only in the branch we
+# are bypassing) -- deliberate: our logger prints nothing, so a message on
+# stderr would be a real error worth seeing rather than browser noise.
+NHCFLAGS+=-DCRASHREPORT=\"/crashlog\"
 NHCFLAGS+=-DCONFIG_ERROR_SECURE=FALSE
 NHCFLAGS+=-DPANICLOG_FMT2
 NHCFLAGS+=-DFCMASK=0644
