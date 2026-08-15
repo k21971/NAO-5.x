@@ -62,6 +62,31 @@ install_atomic()
 {
   _src="$1"; _dst="$2"; _mode="$3"; _own="${4:-}"
   _tmp="$_dst.new.$$"
+
+  # Don't touch what hasn't changed. A routine rebuild is almost always a
+  # source-only change, so dat/nhdat, dat/symbols, dat/license and sysconf come
+  # out byte-identical and re-installing them is pure risk for zero benefit --
+  # every write into a live chroot is a chance to get it wrong. Skipping on
+  # content also makes the install idempotent and makes its output an honest
+  # report of what actually moved.
+  #
+  # Deliberately NOT "install the binary only": nhdat is version-locked to the
+  # binary (its level/lua data must match what the executable expects), so a
+  # rule that never copies it would pair a new binary with a stale nhdat the
+  # first time dat/ really does change. Compare-then-install keeps them in step.
+  if cmp -s "$_src" "$_dst" 2>/dev/null; then
+    # Content is already right, but assert mode/owner anyway -- chmod/chown
+    # modify the inode in place and never truncate, so they are safe on a file
+    # a live game holds open, and this is the only thing that would repair a
+    # drifted mode without a content change.
+    chmod "$_mode" "$_dst" || errorexit "chmod $_mode on unchanged $_dst failed"
+    if [ -n "$_own" ]; then
+      chown "$_own" "$_dst" || errorexit "chown $_own on unchanged $_dst failed"
+    fi
+    echo "  `basename "$_dst"` unchanged - not copying"
+    return 0
+  fi
+  echo "  `basename "$_dst"` CHANGED - staging + atomic rename"
   cp "$_src" "$_tmp"    || errorexit "staging $_dst failed"
   chmod "$_mode" "$_tmp" || errorexit "chmod $_mode on staged $_dst failed"
   if [ -n "$_own" ]; then
@@ -97,11 +122,24 @@ if [ -n "$NETHACKBIN" -a -e "$NETHACKBIN" ]; then
   # so no inode a running game has mapped is touched. It is the SYMLINK swap
   # that has to be atomic -- `ln -fs` is unlink+symlink, and any login landing
   # in that window finds no `nethack` at all.
-  cp "$NETHACKBIN" "$NHBINFILE"
-  chown root:root "$NHBINFILE"
-  chmod 755 "$NHBINFILE"
-  ln -sfn "$NHBINFILE" "nethack.new.$$"
-  mv -T "nethack.new.$$" nethack
+  # Same "don't touch what hasn't changed" rule as install_atomic, and here it
+  # also stops a no-op rebuild dropping another ~12.8M dated copy every run.
+  # NB the binary embeds NETHACK_GIT_SHA, so two builds from the same commit
+  # compare equal while builds from different commits never do.
+  _cur="`readlink nethack 2>/dev/null || true`"
+  if [ -n "$_cur" ] && [ -e "$_cur" ] && cmp -s "$NETHACKBIN" "$_cur"; then
+    echo "  nethack unchanged ($_cur) - not installing a new dated binary"
+  else
+    cp "$NETHACKBIN" "$NHBINFILE"
+    chown root:root "$NHBINFILE"
+    chmod 755 "$NHBINFILE"
+    # The dated name is new, so nothing a running game mapped is touched; it is
+    # the SYMLINK swap that must be atomic. `ln -fs` is unlink+symlink, and a
+    # login landing in that window finds no `nethack` at all.
+    ln -sfn "$NHBINFILE" "nethack.new.$$"
+    mv -T "nethack.new.$$" nethack
+    echo "  nethack -> $NHBINFILE"
+  fi
   LIBS="$LIBS `findlibs $NETHACKBIN`"
   cd "$NAO_CHROOT"
 fi
