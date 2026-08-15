@@ -1130,6 +1130,12 @@ extern void assure_syscf_file(void);
 extern void assure_syscf_file(void);
 #endif
 extern int nhclose(int);
+#ifdef WHEREIS_FILE
+extern void touch_whereis(void);
+extern void delete_whereis(void);
+extern void signal_whereis(int);
+extern void ck_whereis(void);
+#endif
 #ifdef DEBUG
 extern boolean debugcore(const char *, boolean);
 #endif

@@ -38,6 +38,10 @@
 #include "wintty.h" /* more() */
 #endif
 
+#if defined(WHEREIS_FILE) && defined(UNIX)
+#include <sys/stat.h> /* whereis-file chmod() */
+#endif
+
 #if (!defined(MAC68K) && !defined(O_WRONLY) && !defined(AZTEC_C)) \
     || defined(USE_FCNTL)
 #include <fcntl.h>
@@ -90,6 +94,14 @@ const
 #ifdef PREFIXES_IN_USE
 #define FQN_NUMBUF 8
 static char fqn_filename_buffer[FQN_NUMBUF][FQN_MAX_FILENAME];
+#endif
+
+#ifdef WHEREIS_FILE
+/* path template; set_whereisfile() rewrites this in place the first time,
+   expanding "%n" to the player name, so it is expanded at most once */
+static char whereis_file[255] = WHEREIS_FILE;
+/* set by the SIGUSR1 handler, consumed by ck_whereis() */
+static volatile sig_atomic_t whereis_signalled = 0;
 #endif
 
 #if !defined(SAVE_EXTENSION)
@@ -153,6 +165,10 @@ void free_nhfile(NHFILE *);
 
 #ifdef SELECTSAVED
 staticfn int QSORTCALLBACK strcmp_wrap(const void *, const void *);
+#endif
+#ifdef WHEREIS_FILE
+staticfn void set_whereisfile(void);
+staticfn void write_whereis(boolean);
 #endif
 staticfn char *set_bonesfile_name(char *, d_level *);
 staticfn char *set_bonestemp_name(void);
@@ -743,7 +759,135 @@ clearlocks(void)
     /* can't access maxledgerno() before dungeons are created -dlc */
     for (x = (svn.n_dgns ? maxledgerno() : 0); x >= 0; x--)
         delete_levelfile(x); /* not all levels need be present */
+#ifdef WHEREIS_FILE
+    delete_whereis();
+#endif
 }
+
+#ifdef WHEREIS_FILE
+/* expand "%n" in whereis_file to the player name, in place; harmless to
+   call more than once because the "%n" is gone after the first time */
+staticfn void
+set_whereisfile(void)
+{
+    char *p = (char *) strstr(whereis_file, "%n");
+
+    if (p) {
+        int new_whereis_len = (int) (strlen(whereis_file)
+                                     + strlen(svp.plname) - 2); /* %n */
+        char *new_whereis_fn = (char *) alloc((unsigned) (new_whereis_len
+                                                          + 1));
+        char *q = new_whereis_fn;
+
+        strncpy(q, whereis_file, p - whereis_file);
+        q += p - whereis_file;
+        strncpy(q, svp.plname, strlen(svp.plname) + 1);
+        regularize(q);
+        q[strlen(svp.plname)] = '\0';
+        q += strlen(q);
+        p += 2; /* skip "%n" */
+        strncpy(q, p, strlen(p));
+        new_whereis_fn[new_whereis_len] = '\0';
+        Sprintf(whereis_file, "%s", new_whereis_fn);
+        free(new_whereis_fn);
+    }
+}
+
+/* write the current game's status line to <player>.whereis */
+staticfn void
+write_whereis(boolean playing) /* True if the game is still running */
+{
+    FILE *fp;
+    char whereis_work[511];
+
+    if (!program_state.something_worth_saving)
+        return;
+    if (strstr(whereis_file, "%n"))
+        set_whereisfile();
+
+    /* construct the whereis string */
+    Sprintf(whereis_work, "player=%s:depth=%d:dnum=%d:dname=%s:",
+            svp.plname, depth(&u.uz), u.uz.dnum,
+            svd.dungeons[u.uz.dnum].dname);
+    Sprintf(eos(whereis_work), "hp=%d:maxhp=%d:turns=%ld:score=%ld:",
+            u.uhp, u.uhpmax, svm.moves,
+#ifdef SCORE_ON_BOTL
+            botl_score()
+#else
+            0L
+#endif
+            );
+    Sprintf(eos(whereis_work), "role=%s:race=%s:gender=%s:align=%s:",
+            gu.urole.filecode, gu.urace.filecode,
+            genders[flags.female].filecode,
+            aligns[1 - u.ualign.type].filecode);
+    /* conduct is always 0: the field is kept so the record layout stays
+       stable for whatever parses it, but encodeconduct() is staticfn in
+       topten.c and not reachable from here */
+    Sprintf(eos(whereis_work), "conduct=0x%lx:amulet=%d:ascended=%d:",
+            0L, u.uhave.amulet ? 1 : 0,
+            u.uevent.ascended ? 2 : *svk.killer.name ? 1 : 0);
+    Sprintf(eos(whereis_work), "playing=%d\n", playing);
+
+    fp = fopen_datafile(whereis_file, "w", LEVELPREFIX);
+    if (fp) {
+#ifdef UNIX
+        mode_t whereismode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH;
+
+        /* buffer 2: fopen_datafile() above used buffer 0 */
+        (void) chmod(fqname(whereis_file, LEVELPREFIX, 2), whereismode);
+#endif
+        (void) fwrite(whereis_work, strlen(whereis_work), 1, fp);
+        (void) fclose(fp);
+    } else {
+        pline("Can't open %s for output.", whereis_file);
+        pline("No whereis file created.");
+    }
+}
+
+/* SIGUSR1 handler: something outside the game (the web front end) is asking
+   for a refresh.  Only set a flag here -- write_whereis() calls fopen() and
+   malloc(), which are not async-signal-safe and can deadlock against the
+   main line we just interrupted.  ck_whereis() does the work next turn. */
+void
+signal_whereis(int sig_unused UNUSED)
+{
+    whereis_signalled = 1;
+}
+
+/* called once per turn from moveloop_core() */
+void
+ck_whereis(void)
+{
+    if (whereis_signalled) {
+        whereis_signalled = 0;
+        touch_whereis();
+    }
+}
+
+void
+touch_whereis(void)
+{
+    write_whereis(TRUE);
+}
+
+void
+delete_whereis(void)
+{
+    if (program_state.something_worth_saving) {
+        /* if we have valid data to write, just write it but specify that the
+         * game isn't active ("playing=0") */
+        write_whereis(FALSE);
+    } else {
+        /* data may be unavailable for writing, so remove the file instead;
+         * must go through fqname() -- the template is relative and we have
+         * chdir()'d to HACKDIR, while the file lives under VAR_PLAYGROUND */
+        if (strstr(whereis_file, "%n"))
+            set_whereisfile();
+        (void) unlink(fqname(whereis_file, LEVELPREFIX, 0));
+    }
+}
+#endif /* WHEREIS_FILE */
 
 #if defined(SELECTSAVED)
 /* qsort comparison routine */

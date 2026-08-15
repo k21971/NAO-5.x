@@ -104,6 +104,12 @@ moveloop_preamble(boolean resuming)
         iflags.fuzzerpending = FALSE;
     }
 
+#ifdef WHEREIS_FILE
+    /* covers both a new game and a restore; a restored game never passes
+       through goto_level(), so this is its only chance to publish */
+    touch_whereis();
+#endif
+
     program_state.in_moveloop = 1;
     /* for perm_invent preset at startup, display persistent inventory after
        invent is fully populated and the in_moveloop flag has been set */
@@ -278,6 +284,10 @@ moveloop_core(void)
                     prev_dgl_extrainfo = svm.moves;
                     mk_dgl_extrainfo();
                 }
+#endif
+#ifdef WHEREIS_FILE
+                /* honour a SIGUSR1 that arrived since the last turn */
+                ck_whereis();
 #endif
 
                 if (Glib)

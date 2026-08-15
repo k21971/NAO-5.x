@@ -609,6 +609,21 @@ sethanguphandler(void (*handler)(int))
     (void) signal(SIGXCPU, (SIG_RET_TYPE) handler);
 #endif
 #endif /* ?SA_RESTART */
+
+#ifdef WHEREIS_FILE
+    /* Deliberately outside the SA_RESTART split above: unlike SIGHUP, a
+     * whereis refresh must NOT abort a pending read, so ask for restart
+     * where sigaction is available.  signal_whereis() only sets a flag;
+     * ck_whereis() does the writing from the move loop. */
+#ifdef SA_RESTART
+    (void) memset((genericptr_t) &sact, 0, sizeof sact);
+    sact.sa_handler = (SIG_RET_TYPE) signal_whereis;
+    sact.sa_flags = SA_RESTART;
+    (void) sigaction(SIGUSR1, &sact, (struct sigaction *) 0);
+#else
+    (void) signal(SIGUSR1, (SIG_RET_TYPE) signal_whereis);
+#endif
+#endif /* WHEREIS_FILE */
 }
 
 #ifdef PORT_HELP

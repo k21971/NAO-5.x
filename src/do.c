@@ -1970,6 +1970,11 @@ goto_level(
     }
 
     assign_level(&u.uz0, &u.uz); /* reset u.uz0 */
+#ifdef WHEREIS_FILE
+    /* must come after u.uz has been assigned the destination above,
+       otherwise this publishes the level the hero just left */
+    touch_whereis();
+#endif
 #ifdef INSURANCE
     save_currentstate();
 #endif

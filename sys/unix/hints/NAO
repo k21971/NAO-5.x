@@ -340,6 +340,13 @@ NHCFLAGS+=-DDUMPLOG
 # game never creates it. Defining it here rather than in include/config.h
 # keeps NetHack source untouched, same as CRASHREPORT above.
 NHCFLAGS+=-DEXTRAINFO_FN=\"/dgldir/extrainfo-nh500/%n.extrainfo\"
+# WHEREIS_FILE is likewise both switch and path template, for the per-player
+# file the web "who's playing" page reads. %n expands to the player name.
+# Unlike EXTRAINFO_FN this path is RELATIVE: it goes through fopen_datafile()
+# with LEVELPREFIX, which VAR_PLAYGROUND above points at $(HACKDIR)/var, so
+# the file lands in /nh500/var/whereis/. install-to-chroot.sh must create
+# that directory -- the game will not.
+NHCFLAGS+=-DWHEREIS_FILE=\"whereis/%n.whereis\"
 NHCFLAGS+=-DUSE_GENERAL_ALTAR_COLORS
 NHCFLAGS+=-DCHANGE_COLOR
 NHCFLAGS+=-DSELF_RECOVER
