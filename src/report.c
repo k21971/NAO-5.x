@@ -404,6 +404,20 @@ submit_web_report(int cos, const char *msg, const char *why)
 
  full:
         ;
+    /* NAO-local: persist the assembled report URL before handing it off.
+     *
+     * On a headless public server CRASHREPORT is /usr/bin/xdg-open, which does
+     * not exist (and should not) -- so the execve below fails and the entire
+     * payload, backtrace and preceding messages included, is discarded.  By
+     * this label the URL is fully built on every path into it, including the
+     * SWR_* overflow gotos, so one line here captures it whether or not the
+     * handoff works.  paniclog is the right sink: it already exists, it is
+     * backed up, and it is where the operator is already looking.
+     *
+     * Reached only after the player has opted in ("Report now?", pline.c) on
+     * the impossible() path, so this logs no more than they agreed to send.
+     */
+    paniclog("crashreport", url);
 //printf("URL=%ld '%s'\n",strlen(url),url);
 # ifdef WIN32
         int *rv = win32_cr_shellexecute(url);
