@@ -39,6 +39,38 @@ findlibs()
   done
 }
 
+# install_atomic SRC DEST MODE [OWNER]
+#
+# 🔴 NEVER `cp` over a file in a live chroot. `cp` opens the destination
+# O_TRUNC, so an existing file is briefly zero-length WHILE games hold it open:
+#   - every running nethack holds nh500/nhdat open (verified on e1, fd 3, all
+#     live games) and reads level/lua data from it for the whole session, so a
+#     truncating overwrite hands a live game a short read mid-play;
+#   - for anything mmap'd, a demand fault past the shortened EOF is SIGBUS, and
+#     nethack traps only SIGHUP and SIGXCPU -- so that is a LOST CHARACTER, not
+#     a caught error. Measured on this box 2026-08-13 during the chroot lib
+#     swap: `cp` over a mapped libc killed the probe in ~2s, rc=135.
+#
+# Stage alongside the target, then rename(2). A running process keeps its old
+# inode as `(deleted)` and finishes on it; the next exec picks up the new file.
+# Staging in the DESTINATION DIRECTORY is load-bearing -- rename is only atomic
+# within a single filesystem, and a cross-device `mv` silently degrades to
+# copy+unlink, which reintroduces exactly the window this exists to close.
+# Mode and owner are set on the staged copy, so the file is never visible at
+# the target path with the wrong permissions.
+install_atomic()
+{
+  _src="$1"; _dst="$2"; _mode="$3"; _own="${4:-}"
+  _tmp="$_dst.new.$$"
+  cp "$_src" "$_tmp"    || errorexit "staging $_dst failed"
+  chmod "$_mode" "$_tmp" || errorexit "chmod $_mode on staged $_dst failed"
+  if [ -n "$_own" ]; then
+    chown "$_own" "$_tmp" || errorexit "chown $_own on staged $_dst failed"
+  fi
+  # -T so a directory at $_dst can never turn this into a move INTO it.
+  mv -T "$_tmp" "$_dst"  || errorexit "atomic rename into $_dst failed"
+}
+
 set -e
 
 umask 022
@@ -61,24 +93,28 @@ if [ -n "$NETHACKBIN" -a -e "$NETHACKBIN" ]; then
   echo "Copying $NETHACKBIN"
   cd "$NAO_CHROOT/$NHSUBDIR"
   NHBINFILE="`basename $NETHACKBIN`-$DATESTAMP"
+  # The binary itself is safe to plain-cp: $NHBINFILE is a NEW datestamped name,
+  # so no inode a running game has mapped is touched. It is the SYMLINK swap
+  # that has to be atomic -- `ln -fs` is unlink+symlink, and any login landing
+  # in that window finds no `nethack` at all.
   cp "$NETHACKBIN" "$NHBINFILE"
-  ln -fs "$NHBINFILE" nethack
+  chown root:root "$NHBINFILE"
+  chmod 755 "$NHBINFILE"
+  ln -sfn "$NHBINFILE" "nethack.new.$$"
+  mv -T "nethack.new.$$" nethack
   LIBS="$LIBS `findlibs $NETHACKBIN`"
   cd "$NAO_CHROOT"
 fi
 
 echo "Copying NetHack playground stuff"
-cp "$NETHACK_GIT/dat/nhdat" "$NAO_CHROOT/$NHSUBDIR"
-chmod 644 "$NAO_CHROOT/$NHSUBDIR/nhdat"
-cp "$NETHACK_GIT/dat/symbols" "$NAO_CHROOT/$NHSUBDIR"
-chmod 644 "$NAO_CHROOT/$NHSUBDIR/symbols"
-cp "$NETHACK_GIT/dat/license" "$NAO_CHROOT/$NHSUBDIR"
-chmod 644 "$NAO_CHROOT/$NHSUBDIR/license"
+# nhdat above all: every live game holds it open for the whole session.
+install_atomic "$NETHACK_GIT/dat/nhdat"   "$NAO_CHROOT/$NHSUBDIR/nhdat"   644
+install_atomic "$NETHACK_GIT/dat/symbols" "$NAO_CHROOT/$NHSUBDIR/symbols" 644
+install_atomic "$NETHACK_GIT/dat/license" "$NAO_CHROOT/$NHSUBDIR/license" 644
 
 echo "Copying sysconf file"
 SYSCF="$NAO_CHROOT/$NHSUBDIR/sysconf"
-cp "$NETHACK_GIT/sys/unix/sysconf" "$SYSCF"
-chmod 644 $SYSCF
+install_atomic "$NETHACK_GIT/sys/unix/sysconf" "$SYSCF" 644
 
 echo "Creating NetHack variable dir stuff."
 mkdir -p "$NAO_CHROOT/$NHSUBDIR/var"
@@ -108,9 +144,8 @@ if [ -n "$RECOVER" -a -e "$RECOVER" ]; then
   # executable in there can be replaced by a compromised game process and is then
   # run by an admin as root -- persistence + privesc. Same reason the game binary
   # itself is root:root 755. (nao-admin docs/chroot.md, K2's code-vs-data rule.)
-  cp "$RECOVER" "$NAO_CHROOT/$NHSUBDIR/recover"
-  chown root:root "$NAO_CHROOT/$NHSUBDIR/recover"
-  chmod 755 "$NAO_CHROOT/$NHSUBDIR/recover"
+  # Atomic too: an admin can be mid-`recover` on a crashed game while this runs.
+  install_atomic "$RECOVER" "$NAO_CHROOT/$NHSUBDIR/recover" 755 root:root
   rm -f "$NAO_CHROOT/$NHSUBDIR/var/recover"   # clean up the old location
   LIBS="$LIBS `findlibs $RECOVER`"
   cd "$NAO_CHROOT"
@@ -131,6 +166,12 @@ for lib in $LIBS; do
         then
                 echo "$NAO_CHROOT$dest already exists - skipping."
         else
+                # Deliberately a plain cp, NOT install_atomic: this branch only
+                # runs when the destination does not exist, so there is no inode
+                # for a running game to have mapped and nothing to truncate.
+                # Refreshing an EXISTING lib is a different job with a different
+                # tool -- nao-admin scripts/refresh-chroot-libs.sh, which stages
+                # and renames every file. Do not "fix" this into an overwrite.
                 cp "$lib" "$NAO_CHROOT$dest"
                 NEWLIBS=1
         fi
