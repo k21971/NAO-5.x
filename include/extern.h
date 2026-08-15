@@ -3829,8 +3829,11 @@ extern void genl_status_enablefield(int, const char *, const char *,
                                     boolean) NONNULLPTRS;
 extern void genl_status_update(int, genericptr_t, int, int, int,
                                unsigned long *) NONNULLARG2;
-#ifdef DUMPLOG
+#if defined(DUMPLOG) || defined(EXTRAINFO_FN)
 extern char *dump_fmtstr(const char *, char *, boolean) NONNULLPTRS;
+#endif
+#ifdef EXTRAINFO_FN
+extern void mk_dgl_extrainfo(void);
 #endif
 extern void dump_open_log(time_t);
 extern void dump_close_log(void);

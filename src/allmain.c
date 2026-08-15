@@ -11,6 +11,11 @@
 #include <signal.h>
 #endif
 
+#ifdef EXTRAINFO_FN
+/* turn on which the dgamelaunch status file was last written */
+static long prev_dgl_extrainfo = 0;
+#endif
+
 staticfn void moveloop_preamble(boolean);
 staticfn void u_calc_moveamt(int);
 staticfn void maybe_generate_rnd_mon(void);
@@ -263,6 +268,17 @@ moveloop_core(void)
                 /********************************/
 
                 l_nhcore_call(NHCORE_MOVELOOP_TURN);
+
+#ifdef EXTRAINFO_FN
+                /* refresh the dgamelaunch watch-menu entry periodically;
+                   rewriting it every turn would be a file create+chmod+
+                   write per turn per live game for no visible benefit */
+                if (prev_dgl_extrainfo == 0
+                    || prev_dgl_extrainfo + 250 < svm.moves) {
+                    prev_dgl_extrainfo = svm.moves;
+                    mk_dgl_extrainfo();
+                }
+#endif
 
                 if (Glib)
                     glibr();

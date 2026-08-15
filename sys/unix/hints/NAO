@@ -332,6 +332,14 @@ NHCFLAGS+=-DTTY_TILES_ESCCODES
 #NHCFLAGS+=-DNO_CHRONICLE
 #NHCFLAGS+=-DLIVELOG
 NHCFLAGS+=-DDUMPLOG
+# EXTRAINFO_FN is both the on/off switch and the path template for the
+# one-line status file dgamelaunch shows beside a game in its watch menu.
+# %n expands to the player name via dump_fmtstr(). The path is absolute
+# because it is resolved inside the chroot, and the directory it names must
+# be the one install-to-chroot.sh creates (dgldir/extrainfo-nh500) -- the
+# game never creates it. Defining it here rather than in include/config.h
+# keeps NetHack source untouched, same as CRASHREPORT above.
+NHCFLAGS+=-DEXTRAINFO_FN=\"/dgldir/extrainfo-nh500/%n.extrainfo\"
 NHCFLAGS+=-DUSE_GENERAL_ALTAR_COLORS
 NHCFLAGS+=-DCHANGE_COLOR
 NHCFLAGS+=-DSELF_RECOVER

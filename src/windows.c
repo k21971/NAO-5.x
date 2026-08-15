@@ -3,6 +3,9 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#if defined(EXTRAINFO_FN) && defined(UNIX)
+#include <sys/stat.h> /* extrainfo-file chmod() */
+#endif
 #include "dlb.h"
 #ifdef TTY_GRAPHICS
 #include "wintty.h"
@@ -1119,7 +1122,9 @@ RESTORE_WARNING_FORMAT_NONLITERAL
 static struct window_procs dumplog_windowprocs_backup;
 static FILE *dumplog_file;
 
-#ifdef DUMPLOG
+/* EXTRAINFO_FN builds its filename with dump_fmtstr(), so it needs this
+   block even in a build without DUMPLOG */
+#if defined(DUMPLOG) || defined(EXTRAINFO_FN)
 static time_t dumplog_now;
 
 char *
@@ -1238,7 +1243,7 @@ dump_fmtstr(
     *bp = '\0';
     return buf;
 }
-#endif /* DUMPLOG */
+#endif /* DUMPLOG || EXTRAINFO_FN */
 
 void
 dump_open_log(time_t now)
@@ -1384,6 +1389,61 @@ dump_redirect(boolean onoff_flag)
         iflags.in_dumplog = FALSE;
     }
 }
+
+#ifdef EXTRAINFO_FN
+/* Write the one-line dgamelaunch status file for this game.  dgl sorts its
+ * watch menu on the leading integer, so deeper//more interesting games float
+ * to the top; the text after '|' is what a spectator actually sees.
+ * This lives here rather than in files.c because it uses dump_fmtstr().
+ */
+void
+mk_dgl_extrainfo(void)
+{
+    FILE *extrai = (FILE *) 0;
+#ifdef UNIX
+    mode_t eimode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+#endif
+    char new_fn[512];
+
+    (void) dump_fmtstr(EXTRAINFO_FN, new_fn, TRUE);
+
+    extrai = fopen(new_fn, "w");
+    if (extrai) {
+        int sortval = 0;
+        char tmpdng[16];
+
+        sortval += (u.uhave.amulet ? 1024 : 0);
+        if (Is_knox(&u.uz)) {
+            Sprintf(tmpdng, "%s", "Knx");
+            sortval += 245;
+        } else if (In_quest(&u.uz)) {
+            Sprintf(tmpdng, "%s%i", "Q", dunlev(&u.uz));
+            sortval += 250 + (dunlev(&u.uz));
+        } else if (In_endgame(&u.uz)) {
+            Sprintf(tmpdng, "%s", "End");
+            sortval += 256;
+        } else if (In_V_tower(&u.uz)) {
+            Sprintf(tmpdng, "T%i", dunlev(&u.uz));
+            sortval += 235 + (depth(&u.uz));
+        } else if (In_sokoban(&u.uz)) {
+            Sprintf(tmpdng, "S%i", dunlev(&u.uz));
+            sortval += 225 + (depth(&u.uz));
+        } else if (In_mines(&u.uz)) {
+            Sprintf(tmpdng, "M%i", dunlev(&u.uz));
+            sortval += 215 + (dunlev(&u.uz));
+        } else {
+            Sprintf(tmpdng, "D%i", depth(&u.uz));
+            sortval += (depth(&u.uz));
+        }
+#ifdef UNIX
+        (void) chmod(new_fn, eimode);
+#endif
+        (void) fprintf(extrai, "%i|%c %s", sortval,
+                       (u.uhave.amulet ? 'A' : ' '), tmpdng);
+        (void) fclose(extrai);
+    }
+}
+#endif /* EXTRAINFO_FN */
 
 #ifdef TTY_GRAPHICS
 #ifdef TOS
