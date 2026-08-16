@@ -370,19 +370,14 @@ winch_handler(int sig_unused UNUSED)
     }
 #endif
 
+    /* Only set the flag; tty_nhgetch() calls resize_tty() from normal
+       context.  resize_tty() is not async-signal-safe -- it frees and
+       allocates (new_status_window() destroys and recreates the status
+       window) and it writes via stdio -- so calling it from here can
+       re-enter the allocator and corrupt the heap.  The cost of deferring
+       is that a resize is applied on the next keystroke rather than
+       immediately, and that repeated resizes coalesce into one. */
     program_state.resize_pending++; /* resize_tty() will reset it */
-    /* if nethack is waiting for input, which is the most likely scenario,
-       we will go ahead and respond to the resize immediately; otherwise,
-       tty_nhgetch() will do so the next time it's called */
-    if (program_state.getting_char) {
-        resize_tty();
-#if 0   /* [this doesn't work as intended and seems to be unnecessary] */
-        if (resize_mesg) {
-            /* resize_tty() put "Press a key to continue: " on top line */
-            (void) tty_nhgetch(); /* recursion... */
-        }
-#endif
-    }
     return;
 }
 
@@ -4816,7 +4811,9 @@ tty_putstatusfield(const char *text, int x, int y)
 
     print_vt_code2(AVTC_SELECT_WINDOW, NHW_STATUS);
 
-    if (x < ncols && y < nrows) {
+    /* 'x' is 1-based and 'data' is 0-based, so the store below is to
+       data[y][x - 1]; x < 1 would index before the start of the row. */
+    if (x >= 1 && x < ncols && y >= 0 && y < nrows) {
         if (x != cw->curx || y != cw->cury)
             tty_curs(NHW_STATUS, x, y);
         for (i = 0; i < lth; ++i) {
