@@ -92,6 +92,21 @@ catch_stp(void)
 }
 #endif /* AUX */
 
+/*
+ * Upper bounds on what we will believe from TIOCGWINSZ.
+ *
+ * ws_row and ws_col are unsigned short and are simply whatever the client
+ * claims -- over telnet they arrive straight from NAWS (RFC 1073).  struct
+ * DisplayDesc keeps rows and cols as short, and tty_create_nhwindow()
+ * allocates each window row using cols as an unsigned byte count, so a
+ * terminal reporting more than SHRT_MAX columns wraps to a negative width:
+ * that becomes a ~4GB allocation request and then an out-of-bounds store
+ * when the status window is cleared.  Clamp on the way in, which covers
+ * every consumer of LI and CO at once.  No real terminal approaches these.
+ */
+#define MAX_TTY_LI 1000
+#define MAX_TTY_CO 1000
+
 void
 getwindowsz(void)
 {
@@ -108,9 +123,9 @@ getwindowsz(void)
          * any idea.
          */
         if (ttsz.ws_row)
-            LI = ttsz.ws_row;
+            LI = (ttsz.ws_row > MAX_TTY_LI) ? MAX_TTY_LI : (int) ttsz.ws_row;
         if (ttsz.ws_col)
-            CO = ttsz.ws_col;
+            CO = (ttsz.ws_col > MAX_TTY_CO) ? MAX_TTY_CO : (int) ttsz.ws_col;
     }
 #endif
 }
