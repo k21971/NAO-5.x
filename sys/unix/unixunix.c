@@ -16,6 +16,17 @@
 
 static int veryold(int);
 static int eraseoldlocks(void);
+static int lockedpid(int);
+static boolean owner_running(int);
+static boolean owner_is_this_game(int);
+static boolean oldgame_finished(int);
+static boolean end_old_game(int, boolean);
+
+/* How long to let a hung-up game write its save before forcing the issue.
+   Be generous: a clean hangup save is the only outcome that keeps the
+   player's progress up to the current turn, and it has to walk every level
+   file of the game to get there. */
+#define OLDGAME_HUP_WAIT 10 /* seconds */
 
 #ifdef _M_UNIX
 extern void sco_mapon(void);
@@ -99,6 +110,127 @@ eraseoldlocks(void)
     return 1;     /* success! */
 }
 
+/* the pid of the game that owns the lock file, or 0 if it can't be read;
+   savestateinlock() rewrites <lock>.0 with hackpid first, so this stays
+   valid for the life of the game, INSURANCE checkpointing included */
+static int
+lockedpid(int fd)
+{
+    int pid = 0;
+
+    if (read(fd, (genericptr_t) &pid, sizeof pid) != sizeof pid)
+        return 0;
+    return pid;
+}
+
+/* is the game that owns the lock file still running? */
+static boolean
+owner_running(int pid)
+{
+    if (pid <= 0)
+        return FALSE;
+    return (boolean) !(kill((pid_t) pid, 0) == -1 && errno == ESRCH);
+}
+
+/* A pid can be recycled, and on a multi-user installation it may by now
+   belong to somebody else's game; signalling that would be a good deal
+   worse than the bug this guards.  Where the check is cheap, require the
+   process to still look like this player's game; where it isn't, fall back
+   to the same assumption veryold() has always made. */
+static boolean
+owner_is_this_game(int pid)
+{
+#ifdef __linux__
+    char path[64], cmdbuf[BUFSZ];
+    int fd, n, i, start;
+
+    /* The game commonly runs chrooted with no /proc mounted.  When we
+       cannot see even our own entry there is nothing to check against, so
+       fall back to trusting the pid, exactly as veryold() does. */
+    if ((fd = open("/proc/self/cmdline", 0)) < 0)
+        return TRUE;
+    (void) close(fd);
+
+    Sprintf(path, "/proc/%d/cmdline", pid);
+    if ((fd = open(path, 0)) < 0)
+        return FALSE;
+    n = (int) read(fd, (genericptr_t) cmdbuf, sizeof cmdbuf - 1);
+    (void) close(fd);
+    if (n <= 0)
+        return FALSE;
+    cmdbuf[n] = '\0';
+    /* argv[] elements arrive NUL separated; dgamelaunch-style launchers
+       pass the player name as its own argument */
+    for (i = start = 0; i < n; i++)
+        if (!cmdbuf[i]) {
+            if (!strcmp(&cmdbuf[start], svp.plname))
+                return TRUE;
+            start = i + 1;
+        }
+    return FALSE;
+#else
+    nhUse(pid);
+    return TRUE;
+#endif
+}
+
+/* Stop the game that owns the lock file, so that nothing is holding its
+   level files while we recover or erase them.  want_save asks it to write
+   a normal hangup save first -- that is the outcome worth waiting for,
+   since it keeps every turn up to now instead of rolling the character
+   back to its last level change.  A session wedged writing to a pty that
+   nobody is reading will never answer; give up on it rather than leave a
+   second copy of the character running. */
+/* Has the old game let go of its files?  Not the same question as "has it
+   exited": a game that has finished hanging up can sit as a zombie for as
+   long as its launcher takes to reap it, and kill(pid, 0) keeps succeeding
+   the whole time.  end_of_input() calls clearlocks() on its way out, so the
+   lock file going away is the signal that actually matters to us. */
+static boolean
+oldgame_finished(int pid)
+{
+    int fd;
+    const char *fq;
+
+    if (!owner_running(pid))
+        return TRUE;
+    set_levelfile_name(gl.lock, 0);
+    fq = fqname(gl.lock, LEVELPREFIX, 0);
+    if ((fd = open(fq, 0)) < 0)
+        return TRUE;
+    (void) close(fd);
+    return FALSE;
+}
+
+static boolean
+end_old_game(int pid, boolean want_save)
+{
+    int i;
+
+    if (want_save) {
+        if (kill((pid_t) pid, SIGHUP) == -1)
+            return (boolean) (errno == ESRCH);
+        if (iflags.window_inited)
+            pline("Hanging up your other session; waiting for it to save...");
+        else
+            (void) raw_printf(
+                "\nHanging up your other session; waiting for it to save...");
+        for (i = 0; i < OLDGAME_HUP_WAIT; i++) {
+            sleep(1);
+            if (oldgame_finished(pid))
+                return TRUE;
+        }
+    }
+    if (kill((pid_t) pid, SIGKILL) == -1)
+        return (boolean) (errno == ESRCH);
+    /* SIGKILL cannot be caught or ignored, so the old game will not run
+       another instruction and cannot still be holding its files open for
+       writing; waiting for the pid itself to disappear would hang on a
+       zombie whose launcher has not reaped it. */
+    sleep(1);
+    return TRUE;
+}
+
 void
 getlock(void)
 {
@@ -106,7 +238,8 @@ getlock(void)
     static const char destroy_old_game_prompt[] =
     "There is already a game in progress under your name.  Destroy old game?";
 #endif
-    int i = 0, fd, c, too_old;
+    int i = 0, fd, c, too_old, oldpid;
+    boolean oldlive;
     const char *fq_lock;
 
 #ifdef TTY_GRAPHICS
@@ -172,19 +305,28 @@ getlock(void)
             error("Cannot open %s", fq_lock);
         }
 
-        /* veryold() no longer conditionally closes fd */
-        too_old = veryold(fd);
+        /* An old game is always offered back to its owner.  A lock whose
+           process is gone is a crashed game, which is exactly the case
+           self-recovery exists for; erasing it unasked destroys a game that
+           was still perfectly recoverable.  (The gl.locknum branch above
+           must still reap stale locks -- there the lock names are a fixed
+           pool and somebody else needs the slot.) */
+        oldpid = lockedpid(fd);
         (void) close(fd);
-        if (too_old && eraseoldlocks())
-            goto gotlock;
+        oldlive = (boolean) (owner_running(oldpid)
+                             && owner_is_this_game(oldpid));
 
         /* drop the "perm" lock while the user decides */
         unlock_file(HLOCK);
         if (iflags.window_inited) {
 #ifdef SELF_RECOVER
-            c = yn_function(
-             "Old game in progress. Destroy [y], Recover [r], or Cancel [n]?",
-                            "ynr", 'n', FALSE);
+            c = oldlive
+                ? yn_function(
+       "Old game still running.  Take over [t], Destroy [y], or Cancel [n]?",
+                              "tyn", 'n', FALSE)
+                : yn_function(
+            "Old game in progress.  Recover [r], Destroy [y], or Cancel [n]?",
+                              "ryn", 'n', FALSE);
 #else
             /* this is a candidate for paranoid_confirmation */
             c = y_n(destroy_old_game_prompt);
@@ -193,14 +335,18 @@ getlock(void)
 #ifdef SELF_RECOVER
             (void) raw_printf(
         "\nThere is already a game in progress under your name.  Do what?\n");
+            if (oldlive)
+                (void) raw_printf(
+   "\n  t - Take it over (your other session is hung up and saved first)");
+            else
+                (void) raw_printf("\n  r - Try to recover it");
             (void) raw_printf("\n  y - Destroy old game");
-            (void) raw_printf("\n  r - Try to recover it");
             (void) raw_printf("\n  n - Cancel");
             (void) raw_printf("\n\n  => ");
             (void) fflush(stdout);
             do {
                 c = getchar();
-            } while (!strchr("rRyYnN", c) && c != -1);
+            } while (!strchr(oldlive ? "tTyYnN" : "rRyYnN", c) && c != -1);
 #else
             (void) raw_printf("\n%s [yn] ", destroy_old_game_prompt);
             (void) fflush(stdout);
@@ -214,8 +360,53 @@ getlock(void)
             }
 #endif
         }
+
+        /* We prompted with state that is by now several seconds old, and
+           two sessions can reach this point together, so retake the lock
+           and re-read the pid before acting on either answer. */
+        if (c == 'y' || c == 'Y'
 #ifdef SELF_RECOVER
-        if (c == 'r' || c == 'R') {
+            || c == 'r' || c == 'R' || c == 't' || c == 'T'
+#endif
+            ) {
+            if (!lock_file(HLOCK, LOCKPREFIX, 10)) {
+                wait_synch();
+                error("%s", "");
+            }
+            /* fqname() hands back a static buffer, so re-derive the name
+               rather than trusting the one we opened with before the
+               prompt -- same reason the recover branch below redoes it. */
+            set_levelfile_name(gl.lock, 0);
+            fq_lock = fqname(gl.lock, LEVELPREFIX, 0);
+            oldpid = 0;
+            if ((fd = open(fq_lock, 0)) != -1) {
+                oldpid = lockedpid(fd);
+                (void) close(fd);
+            }
+            oldlive = (boolean) (owner_running(oldpid)
+                                 && owner_is_this_game(oldpid));
+        }
+#ifdef SELF_RECOVER
+        if (c == 'r' || c == 'R' || c == 't' || c == 'T') {
+            /* Never recover out from under a running game: recovery deletes
+               the level files it reads, leaving two divergent copies of one
+               character -- everything the live copy has already dropped
+               exists both on its floor and in the recovered inventory, and
+               the abandoned copy then dies of "trickery" when it next needs
+               a level file.  Stop the old game first, then recover. */
+            if (oldlive && !end_old_game(oldpid, TRUE)) {
+                unlock_file(HLOCK);
+                error("Couldn't take over the old game.");
+            }
+            /* A hangup save clears the level files on its way out, so if
+               the lock file is gone the old game saved itself properly and
+               there is nothing left to recover -- the ordinary restore
+               path picks the save up from here. */
+            set_levelfile_name(gl.lock, 0);
+            fq_lock = fqname(gl.lock, LEVELPREFIX, 0);
+            if ((fd = open(fq_lock, 0)) == -1)
+                goto gotlock;
+            (void) close(fd);
             if (recover_savefile() && program_state.in_self_recover) {
                 set_levelfile_name(gl.lock, 0);
                 fq_lock = fqname(gl.lock, LEVELPREFIX, 0);
@@ -227,6 +418,12 @@ getlock(void)
         } else
 #endif
         if (c == 'y' || c == 'Y') {
+            /* the player asked for the old game to be gone, so there is no
+               save worth waiting for; just stop it holding the level files */
+            if (oldlive && !end_old_game(oldpid, FALSE)) {
+                unlock_file(HLOCK);
+                error("Couldn't destroy old game.");
+            }
             if (eraseoldlocks()) {
                 goto gotlock;
             } else {
@@ -234,7 +431,6 @@ getlock(void)
                 error("Couldn't destroy old game.");
             }
         } else {
-            unlock_file(HLOCK);
             error("%s", "");
         }
     }
